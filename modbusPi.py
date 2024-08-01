@@ -73,7 +73,10 @@ def checkList(rawList):
 	return strList
 
 
-usage = "usage: %prog \n read format: \"ID/IP,dev/port,baud,dataType,offset,numRegs\"\n write format: \"ID/IP,dev/port,baud,dataType,offset,data1,data2,...\"\n Data Types: 1=Coils, 2=Discrete Registers, 3=Input Registers, 4=Holding Registers\n NOTE: When using TCP, baudrate still needs to be inputted, but will not be used"
+usage = "%prog \n Read format: \"ID/IP,dev/port,baud,dataType,offset,numRegs\"\n Write format: \"ID/IP,dev/port,baud,dataType,offset,data1,data2,...\"\n \
+Data Types: 1=Coils, 2=Discrete Registers, 3=Input Registers, 4=Holding Registers\n NOTE: When using TCP, baudrate still needs to be inputted, but will not be used\
+	\n EXAMPLE: Reads 10 values from TCP modbus server at offset 30 and pipes it to write those values to an RTU device starting at offset 0\n \
+	  python3 modbusPi.py -r \"58.105.200.89,502,0,4,30,10\" -w \"1,/dev/ttyAMA0,9600,4,0\" -p"
 parser = optparse.OptionParser(usage=usage)
 
 parser.add_option('-r','--read',action="store",type="string",dest='read',help ='Specify settings of device to read from.')
