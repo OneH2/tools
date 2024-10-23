@@ -1,5 +1,5 @@
 import smbus2
-import time, struct,sys
+import time, struct,sys,os,subprocess
 from pyModbusTCP.client import ModbusClient
 from pyModbusTCP.utils import encode_ieee
 # Config Register (R/W)
@@ -18,6 +18,8 @@ _REG_CURRENT								= 0x04
 
 # CALIBRATION REGISTER (R/W)
 _REG_CALIBRATION						= 0x05
+
+voltageMin = 3600
 
 RELOAD_ADD = 0x00
 RELOAD_KEY = 0xCA
@@ -160,6 +162,13 @@ class INA219:
 		if(p > 100):p = 100
 		if(p < 0):p = 0
 		return p
+	
+	def checkShutdown(self):
+		return -1
+	def readChargeStatus(self):
+		return -1
+	def readTemp(self):
+		return float(0)
 
 class X729:
 	def __init__(self, i2c_bus=1, addr=0x36):
@@ -186,35 +195,74 @@ class X729:
 	
 	def readPower(self):
 		return float(0)
+	
+	def checkShutdown(self):
+		return -1
+	def readChargeStatus(self):
+		return -1
+	def readTemp(self):
+		return float(0)
 
 class sequent7:
-	def __init__(self,i2c_bus=1,addr=0x30):
-		self.bus = smbus2.SMBus(i2c_bus)
-		self.addr = addr
+	def __init__(self):
+		pass
 
 	def getName(self):
 		return 3
 
 	def readVoltage(self):
 		try:
-			val = self.bus.read_word_data(self.addr, V_BAT_ADD) / 1000.0
+			val = (int(subprocess.check_output("wdt -g vbat", shell=True)))/1000.0
 		except Exception as e:
 			val = 0
-		#self.bus.close()
 		return val
 
 	def readCurrent(self):
 		return float(0)
 	
+	def readTemp(self):
+		try:
+			val = int(subprocess.check_output("wdt -g temp ", shell=True))
+		except:
+			val = -1
+		return val
+	
+	def readChargeStatus(self):
+		try:
+			val = int(subprocess.check_output("wdt -g charge", shell=True))
+		except:
+			val = -1
+		return val
+
 	def readPower(self):
 		return float(0)
 	
+	def checkShutdown(self):
+		try:
+			voltage = int(subprocess.check_output("wdt -g vbat", shell=True))
+			if voltage > 0:
+				if voltage < 3600:
+					os.system("wdt -rob 0")
+					os.system("wdt -p 30")
+					os.system("sudo shutdown now")
+					return 1
+				else:
+					os.system("wdt -rob 1")
+					os.system("wdt -r")
+		except:
+			return -1
+
+	
 	def readPercentage(self):
-		bus_voltage = (self.bus.read_word_data(self.addr, V_BAT_ADD) / 1000.0)
-		p = 123 - (123/pow((1+ pow((bus_voltage/3.7),80)),0.165))
-		if(p > 100):p = 100
-		if(p < 0):p = 0
+		try:
+			val = (int(subprocess.check_output("wdt -g vbat", shell=True)))/1000.0
+			p = 123 - (123/pow((1+ pow((val/3.7),80)),0.165))
+			if(p > 100):p = 100
+			if(p < 0):p = 0
+		except Exception as e:
+			p = -1
 		return p
+		
 if __name__=='__main__':
 	
 	def split32(val):
@@ -247,10 +295,12 @@ if __name__=='__main__':
 			voltage = device.readVoltage()					
 			current = device.readCurrent()								
 			power = device.readPower()
-			percentage = device.readPercentage()									
+			percentage = device.readPercentage()
+			temp = device.readTemp()
+			status = device.readChargeStatus()				
 			
 			data = []
-			data.extend([3,0])
+			data.extend([device.getName(),device.readChargeStatus()])
 			data.extend(split32(encode_ieee(voltage)))
 
 			data.extend(split32(encode_ieee(current)))
@@ -259,15 +309,22 @@ if __name__=='__main__':
 
 			data.extend(split32(encode_ieee(percentage)))
 
-			print(data)
-			mbTCP.write_multiple_registers(0,data)
-			print("Load Voltage:  {:6.3f} V".format(voltage))
-			print("Current:       {:9.6f} A".format(current))
-			print("Power:         {:6.3f} W".format(power))
-			print("Percent:        {:3.1f}%".format(percentage))
-			print("")
+			data.append(temp)
 
-			time.sleep(2)
+			
+			mbTCP.write_multiple_registers(0,data)
+
+			device.checkShutdown()
+			# print(data)
+			# print("Load Voltage:  {:6.3f} V".format(voltage))
+			# print("Current:       {:9.6f} A".format(current))
+			# print("Power:         {:6.3f} W".format(power))
+			# print("Percent:        {:3.1f}%".format(percentage))
+			# print("temp:          {:6.3f}C".format(temp))
+			# print("")
+
+			time.sleep(5)
+			
 	except Exception as e:
 		print(e)
 		device.bus.close()
