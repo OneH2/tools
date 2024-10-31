@@ -2,9 +2,6 @@ import smbus2
 import time, struct,sys,os,subprocess
 from pyModbusTCP.client import ModbusClient
 from pyModbusTCP.utils import encode_ieee
-
-TCP_MODBUS_ID = 200
-
 # Config Register (R/W)
 _REG_CONFIG								 = 0x00
 # SHUNT VOLTAGE REGISTER (R)
@@ -273,7 +270,7 @@ if __name__=='__main__':
 		low = val & 0xFFFF  # extract low 16 bits
 		return high, low
 	try:
-		mbTCP = ModbusClient(host="127.0.0.1", port=502, unit_id=TCP_MODBUS_ID, auto_open=True)
+		mbTCP = ModbusClient(host="127.0.0.1", port=502, unit_id=201, auto_open=True)
 		bus = smbus2.SMBus(1)
 		try:
 			val = bus.read_byte_data(0x42, 0)
