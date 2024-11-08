@@ -4,11 +4,11 @@
 #include <errno.h>
 #include <unistd.h>
 #include <modbus.h>
-#include <sys/select.h>
 
-#define SLAVE_ID 203
-#define TCP_PORT 502
-#define NUM_REGISTERS 20
+#define MODBUS_SLAVE_ADDESS 203
+#define MODBUS_TCP_PORT_ID 502
+#define MODBUS_BUFFER_SIZE 20
+#define MODBUS_REGISTER_OFFSET 0
 
 // Function to convert NMEA absolute position to decimal degrees 
 float GpsToDecimalDegrees(const char* nmeaPos, const char* quadrant) {
@@ -45,12 +45,15 @@ float twoUInt16ToFloat(u_int16_t msb, u_int16_t lsb) {
 }
 
 int main(void) {
-  // Initialize GPS
+  modbus_t *mb0;
+  uint16_t modbusBuffer[MODBUS_BUFFER_SIZE] = {0};
+  mb0 = modbus_new_tcp("127.0.0.1", MODBUS_TCP_PORT_ID);
+  modbus_set_slave(mb0, MODBUS_SLAVE_ADDESS);
+  
   FILE *gpsDevice;
   
   char *token;
   char buffer[100];
-  char rawData[100];
   
   char time[15];           // UTC time: hhmmss.sss
   char latitude[15];       // Latitude: ddmm.mmmmm
@@ -97,183 +100,114 @@ int main(void) {
     perror("Error opening gps device");
     return 1;
   }
-  
-  // Initialize Modbus Slave
-  modbus_t *ctx;
-  modbus_mapping_t *mb_mapping;
-  int server_socket;
-  int rc;
-  uint8_t request[MODBUS_TCP_MAX_ADU_LENGTH];  // Buffer for modbus_receive
-  
-  // Create Modbus TCP context and mappings
-  ctx = modbus_new_tcp("127.0.0.1", TCP_PORT);
-  if (ctx == NULL) {
-    fprintf(stderr, "Unable to allocate libmodbus context\n");
-    return -1;
-  }
-  modbus_set_slave(ctx, SLAVE_ID);
-  mb_mapping = modbus_mapping_new(0, 0, NUM_REGISTERS, 0);
-  if (mb_mapping == NULL) {
-    fprintf(stderr, "Failed to allocate mapping: %s\n", modbus_strerror(errno));
-    modbus_free(ctx);
-    return -1;
-  }
-  
-  // Initialize holding registers
-  for (int i = 0; i < NUM_REGISTERS; i++) {
-    mb_mapping->tab_registers[i] = 0;
-  }
-  
-  // Start listening for incoming connections
-  server_socket = modbus_tcp_listen(ctx, 1);
-  if (server_socket == -1) {
-    fprintf(stderr, "Failed to create server socket\n");
-    modbus_mapping_free(mb_mapping);
-    modbus_free(ctx);
-    return -1;
-  }
 
-  // Set up select to monitor the server socket for incoming connections
-  fd_set read_fds;
-  struct timeval timeout;
-
-  // Check for GPS data
   while (fgets(buffer, 100, gpsDevice)) {
-    FD_ZERO(&read_fds);
-    FD_SET(server_socket, &read_fds);
-    
-    // Set timeout value
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 100000;
-
-    // Use select to wait for a connection or timeout
-    int ready = select(server_socket + 1, &read_fds, NULL, NULL, &timeout);
-    if (ready > 0) {
-      // If the server socket is ready, accept the connection
-      if (FD_ISSET(server_socket, &read_fds)) {
-        modbus_tcp_accept(ctx, &server_socket);
-        
-        // Handle a single Modbus request
-        rc = modbus_receive(ctx, request);
-        
-        if (rc > 0) {
-          if (request[6] == SLAVE_ID) {
-            modbus_reply(ctx, request, rc, mb_mapping);
-          } 
-        } 
-        else if (rc == -1) {
-          fprintf(stderr, "Connection closed or error: %s\n", modbus_strerror(errno));
-          break;
-        }
-      }
-    } 
-    else if (ready == 0) {
-      // Timeout occurred, no activity, continue with GPS polling
-      if (buffer[0] != '\0') {
-        if (strstr(buffer, "$GPGGA") != NULL) {
-          // Store a copy of original string
-          strcpy(rawData, buffer);
-          token = strtok(buffer, ",");
-    
-          // Split string and store in corresponding variables
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(time, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(latitude, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(latDirection, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(longitude, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(longDirection, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(fixQuality, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(numStatellites, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(gpsPrecision, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(elevation, token);
-    
-          token = strtok(NULL, ",");
-          if (token != NULL) strcpy(geoidHeight, token);
-    
-          // Convert nmea position and direction to decimal degrees
-          latitudeDecimalDegree = GpsToDecimalDegrees(latitude, latDirection);
-          longitudeDecimalDegree = GpsToDecimalDegrees(longitude, longDirection);
-    
-          // Convert decimal degrees float into 16-bit unsigned int MSB and LSB
-          floatToTwoUInt16(latitudeDecimalDegree, &latitudeMSB, &latitudeLSB);
-          floatToTwoUInt16(longitudeDecimalDegree, &longitudeMSB, &longitudeLSB);
-          floatToTwoUInt16(atof(gpsPrecision), &precisionMSB, &precisionLSB);
-          floatToTwoUInt16(atof(elevation), &elevationMSB, &elevationLSB);
-    
-          mb_mapping->tab_registers[0] = latitudeMSB;
-          mb_mapping->tab_registers[1] = latitudeLSB;
-          mb_mapping->tab_registers[2] = longitudeMSB;
-          mb_mapping->tab_registers[3] = longitudeLSB;
-          mb_mapping->tab_registers[4] = atoi(fixQuality);
-          mb_mapping->tab_registers[5] = atoi(numStatellites);
-          mb_mapping->tab_registers[6] = precisionMSB;
-          mb_mapping->tab_registers[7] = precisionLSB;
-          mb_mapping->tab_registers[8] = elevationMSB;
-          mb_mapping->tab_registers[9] = elevationLSB;
-        }
-        else if (strstr(buffer, "$GPVTG") != NULL) {
-          strcpy(rawData, buffer);
-          token = strtok(buffer, ",");
-          
-          token = strtok(NULL, ",");
-          if(token != NULL) strcpy(trackMadeGoodTrue, token);
-          
-          token = strtok(NULL, ",");
-          
-          token = strtok(NULL, ",");
-          if(token != NULL) strcpy(trackMadeGoodMagnetic, token);
-          
-          token = strtok(NULL, ",");
-          
-          token = strtok(NULL, ",");
-          if(token != NULL) strcpy(speedInKnot, token);
-          
-          token = strtok(NULL, ",");
-          
-          token = strtok(NULL, ",");
-          if(token != NULL) strcpy(speedInKmHr, token);
-          
-          floatToTwoUInt16(atof(trackMadeGoodTrue), &trackMadeGoodTrueMSB, &trackMadeGoodTrueLSB);
-          floatToTwoUInt16(atof(trackMadeGoodMagnetic), &trackMadeGoodMagneticMSB, &trackMadeGoodMagneticLSB);
-          floatToTwoUInt16(atof(speedInKnot), &speedInKnotMSB, &speedInKnotLSB);
-          floatToTwoUInt16(atof(speedInKmHr), &speedInKmHrMSB, &speedInKmHrLSB);
-          
-          mb_mapping->tab_registers[10] = trackMadeGoodTrueMSB;
-          mb_mapping->tab_registers[11] = trackMadeGoodTrueLSB;
-          mb_mapping->tab_registers[12] = trackMadeGoodMagneticMSB;
-          mb_mapping->tab_registers[13] = trackMadeGoodMagneticLSB;
-          mb_mapping->tab_registers[14] = speedInKnotMSB;
-          mb_mapping->tab_registers[15] = speedInKnotLSB;
-          mb_mapping->tab_registers[16] = speedInKmHrMSB;
-          mb_mapping->tab_registers[17] = speedInKmHrLSB;
-        }
-      }
-    } 
-    else {
-      perror("Error in select");
-      break;
+    if (buffer[0] != '\0') {
+      if (strstr(buffer, "$GPGGA") != NULL) {
+      // Split string and store in corresponding variables
+      token = strtok(buffer, ",");
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(time, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(latitude, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(latDirection, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(longitude, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(longDirection, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(fixQuality, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(numStatellites, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(gpsPrecision, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(elevation, token);
+      
+      token = strtok(NULL, ",");
+      if (token != NULL) strcpy(geoidHeight, token);
+      
+      // Convert nmea position and direction to decimal degrees
+      latitudeDecimalDegree = GpsToDecimalDegrees(latitude, latDirection);
+      longitudeDecimalDegree = GpsToDecimalDegrees(longitude, longDirection);
+      
+      // Convert decimal degrees float into 16-bit unsigned int MSB and LSB
+      floatToTwoUInt16(latitudeDecimalDegree, &latitudeMSB, &latitudeLSB);
+      floatToTwoUInt16(longitudeDecimalDegree, &longitudeMSB, &longitudeLSB);
+      floatToTwoUInt16(atof(gpsPrecision), &precisionMSB, &precisionLSB);
+      floatToTwoUInt16(atof(elevation), &elevationMSB, &elevationLSB);
+      
+      // Store data in modbus buffer
+      modbusBuffer[0] = latitudeMSB;
+      modbusBuffer[1] = latitudeLSB;
+      modbusBuffer[2] = longitudeMSB;
+      modbusBuffer[3] = longitudeLSB;
+      modbusBuffer[4] = atoi(fixQuality);
+      modbusBuffer[5] = atoi(numStatellites);
+      modbusBuffer[6] = precisionMSB;
+      modbusBuffer[7] = precisionLSB;
+      modbusBuffer[8] = elevationMSB;
+      modbusBuffer[9] = elevationLSB;
     }
+    else if (strstr(buffer, "$GPVTG") != NULL) {
+      token = strtok(buffer, ",");
+      
+      token = strtok(NULL, ",");
+      if(token != NULL) strcpy(trackMadeGoodTrue, token);
+      
+      token = strtok(NULL, ",");
+      
+      token = strtok(NULL, ",");
+      if(token != NULL) strcpy(trackMadeGoodMagnetic, token);
+      
+      token = strtok(NULL, ",");
+      
+      token = strtok(NULL, ",");
+      if(token != NULL) strcpy(speedInKnot, token);
+      
+      token = strtok(NULL, ",");
+      
+      token = strtok(NULL, ",");
+      if(token != NULL) strcpy(speedInKmHr, token);
+      
+      floatToTwoUInt16(atof(trackMadeGoodTrue), &trackMadeGoodTrueMSB, &trackMadeGoodTrueLSB);
+      floatToTwoUInt16(atof(trackMadeGoodMagnetic), &trackMadeGoodMagneticMSB, &trackMadeGoodMagneticLSB);
+      floatToTwoUInt16(atof(speedInKnot), &speedInKnotMSB, &speedInKnotLSB);
+      floatToTwoUInt16(atof(speedInKmHr), &speedInKmHrMSB, &speedInKmHrLSB);
+      
+      modbusBuffer[10] = trackMadeGoodTrueMSB;
+      modbusBuffer[11] = trackMadeGoodTrueLSB;
+      modbusBuffer[12] = trackMadeGoodMagneticMSB;
+      modbusBuffer[13] = trackMadeGoodMagneticLSB;
+      modbusBuffer[14] = speedInKnotMSB;
+      modbusBuffer[15] = speedInKnotLSB;
+      modbusBuffer[16] = speedInKmHrMSB;
+      modbusBuffer[17] = speedInKmHrLSB;
+      }
+    }
+    
+    if (modbus_connect(mb0) == -1) {
+      printf("\n100 connection failed: %s", modbus_strerror(errno));
+      modbus_free(mb0);
+    }
+    
+    // Write modbus buffer to slave device
+    modbus_write_registers(mb0, MODBUS_REGISTER_OFFSET, MODBUS_BUFFER_SIZE, modbusBuffer);
+    modbus_close(mb0);
+    sleep(1);
   }
-
+  
   fclose(gpsDevice);
-  close(server_socket);
-  modbus_mapping_free(mb_mapping);
-  modbus_free(ctx);
+  modbus_free(mb0);
   return 0;
 }
