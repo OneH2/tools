@@ -1,14 +1,18 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <modbus.h>
 
-#define MODBUS_SLAVE_ADDESS 203
-#define MODBUS_TCP_PORT_ID 502
+#define MODBUS_SLAVE_ID 203
+#define MODBUS_TCP_PORT 502
 #define MODBUS_BUFFER_SIZE 20
 #define MODBUS_REGISTER_OFFSET 0
+
+// Changed to true for debug print out
+#define DEBUG_PRINT false
 
 // Function to convert NMEA absolute position to decimal degrees 
 float GpsToDecimalDegrees(const char* nmeaPos, const char* quadrant) {
@@ -36,6 +40,14 @@ void floatToTwoUInt16(float floatData, u_int16_t *msb, u_int16_t *lsb) {
   *lsb = (u_int16_t)(temp & 0xFFFF);
 }
 
+// Function to convert 32-bit float into 16-bit unsigned int MSB & LSB
+void int32ToTwoUInt16(int intData, u_int16_t *msb, u_int16_t *lsb) {
+  u_int32_t temp;
+  memcpy(&temp, &intData, sizeof(int));
+  *msb = (u_int16_t)((temp >> 16) & 0xFFFF);
+  *lsb = (u_int16_t)(temp & 0xFFFF);
+}
+
 // Function to convert 16-bit unsigned int MSB & LSB to 32-bit float
 float twoUInt16ToFloat(u_int16_t msb, u_int16_t lsb) {
   float result;
@@ -47,10 +59,13 @@ float twoUInt16ToFloat(u_int16_t msb, u_int16_t lsb) {
 int main(void) {
   modbus_t *mb0;
   uint16_t modbusBuffer[MODBUS_BUFFER_SIZE] = {0};
-  mb0 = modbus_new_tcp("127.0.0.1", MODBUS_TCP_PORT_ID);
-  modbus_set_slave(mb0, MODBUS_SLAVE_ADDESS);
+  mb0 = modbus_new_tcp("127.0.0.1", MODBUS_TCP_PORT);
+  modbus_set_slave(mb0, MODBUS_SLAVE_ID);
   
   FILE *gpsDevice;
+  
+  bool gpggaDataUpdated = false;
+  bool gpvtgDataUpdated = false;
   
   char *token;
   char buffer[100];
@@ -77,6 +92,8 @@ int main(void) {
   float latitudeDecimalDegreeConverted = 0.0;
   float longitudeDecimalDegreeConverted = 0.0;
   
+  u_int16_t timeMSB = 0;
+  u_int16_t timeLSB = 0;
   u_int16_t latitudeMSB = 0;
   u_int16_t latitudeLSB = 0;
   u_int16_t longitudeMSB = 0;
@@ -104,107 +121,152 @@ int main(void) {
   while (fgets(buffer, 100, gpsDevice)) {
     if (buffer[0] != '\0') {
       if (strstr(buffer, "$GPGGA") != NULL) {
-      // Split string and store in corresponding variables
-      token = strtok(buffer, ",");
+        // Split string and store in corresponding variables
+        token = strtok(buffer, ",");
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(time, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(latitude, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(latDirection, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(longitude, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(longDirection, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(fixQuality, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(numStatellites, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(gpsPrecision, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(elevation, token);
+        
+        token = strtok(NULL, ",");
+        if (token != NULL) strcpy(geoidHeight, token);
+        
+        // Convert nmea position and direction to decimal degrees
+        latitudeDecimalDegree = GpsToDecimalDegrees(latitude, latDirection);
+        longitudeDecimalDegree = GpsToDecimalDegrees(longitude, longDirection);
+        
+        // Convert decimal degrees float into 16-bit unsigned int MSB and LSB
+        floatToTwoUInt16(latitudeDecimalDegree, &latitudeMSB, &latitudeLSB);
+        floatToTwoUInt16(longitudeDecimalDegree, &longitudeMSB, &longitudeLSB);
+        floatToTwoUInt16(atof(gpsPrecision), &precisionMSB, &precisionLSB);
+        floatToTwoUInt16(atof(elevation), &elevationMSB, &elevationLSB);
+        
+        int32ToTwoUInt16(atoi(time), &timeMSB, &timeLSB);
+        
+        // Store data in modbus buffer
+        modbusBuffer[ 0] = latitudeMSB;
+        modbusBuffer[ 1] = latitudeLSB;
+        modbusBuffer[ 2] = longitudeMSB;
+        modbusBuffer[ 3] = longitudeLSB;
+        modbusBuffer[ 4] = timeMSB;
+        modbusBuffer[ 5] = timeLSB;
+        modbusBuffer[ 6] = atoi(fixQuality);
+        modbusBuffer[ 7] = atoi(numStatellites);
+        modbusBuffer[ 8] = precisionMSB;
+        modbusBuffer[ 9] = precisionLSB;
+        modbusBuffer[10] = elevationMSB;
+        modbusBuffer[11] = elevationLSB;
+        
+        // Set data update flag to keep track of each loop
+        gpggaDataUpdated = true;
       
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(time, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(latitude, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(latDirection, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(longitude, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(longDirection, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(fixQuality, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(numStatellites, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(gpsPrecision, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(elevation, token);
-      
-      token = strtok(NULL, ",");
-      if (token != NULL) strcpy(geoidHeight, token);
-      
-      // Convert nmea position and direction to decimal degrees
-      latitudeDecimalDegree = GpsToDecimalDegrees(latitude, latDirection);
-      longitudeDecimalDegree = GpsToDecimalDegrees(longitude, longDirection);
-      
-      // Convert decimal degrees float into 16-bit unsigned int MSB and LSB
-      floatToTwoUInt16(latitudeDecimalDegree, &latitudeMSB, &latitudeLSB);
-      floatToTwoUInt16(longitudeDecimalDegree, &longitudeMSB, &longitudeLSB);
-      floatToTwoUInt16(atof(gpsPrecision), &precisionMSB, &precisionLSB);
-      floatToTwoUInt16(atof(elevation), &elevationMSB, &elevationLSB);
-      
-      // Store data in modbus buffer
-      modbusBuffer[0] = latitudeMSB;
-      modbusBuffer[1] = latitudeLSB;
-      modbusBuffer[2] = longitudeMSB;
-      modbusBuffer[3] = longitudeLSB;
-      modbusBuffer[4] = atoi(fixQuality);
-      modbusBuffer[5] = atoi(numStatellites);
-      modbusBuffer[6] = precisionMSB;
-      modbusBuffer[7] = precisionLSB;
-      modbusBuffer[8] = elevationMSB;
-      modbusBuffer[9] = elevationLSB;
-    }
-    else if (strstr(buffer, "$GPVTG") != NULL) {
-      token = strtok(buffer, ",");
-      
-      token = strtok(NULL, ",");
-      if(token != NULL) strcpy(trackMadeGoodTrue, token);
-      
-      token = strtok(NULL, ",");
-      
-      token = strtok(NULL, ",");
-      if(token != NULL) strcpy(trackMadeGoodMagnetic, token);
-      
-      token = strtok(NULL, ",");
-      
-      token = strtok(NULL, ",");
-      if(token != NULL) strcpy(speedInKnot, token);
-      
-      token = strtok(NULL, ",");
-      
-      token = strtok(NULL, ",");
-      if(token != NULL) strcpy(speedInKmHr, token);
-      
-      floatToTwoUInt16(atof(trackMadeGoodTrue), &trackMadeGoodTrueMSB, &trackMadeGoodTrueLSB);
-      floatToTwoUInt16(atof(trackMadeGoodMagnetic), &trackMadeGoodMagneticMSB, &trackMadeGoodMagneticLSB);
-      floatToTwoUInt16(atof(speedInKnot), &speedInKnotMSB, &speedInKnotLSB);
-      floatToTwoUInt16(atof(speedInKmHr), &speedInKmHrMSB, &speedInKmHrLSB);
-      
-      modbusBuffer[10] = trackMadeGoodTrueMSB;
-      modbusBuffer[11] = trackMadeGoodTrueLSB;
-      modbusBuffer[12] = trackMadeGoodMagneticMSB;
-      modbusBuffer[13] = trackMadeGoodMagneticLSB;
-      modbusBuffer[14] = speedInKnotMSB;
-      modbusBuffer[15] = speedInKnotLSB;
-      modbusBuffer[16] = speedInKmHrMSB;
-      modbusBuffer[17] = speedInKmHrLSB;
+        if(DEBUG_PRINT) {
+          printf("\n***** Degrees and decimal minutes *****\n");
+          printf("Latitude: %s (direction: %s)\n", latitude, latDirection);
+          printf("Longitude: %s (direction: %s)\n", longitude, longDirection);
+          printf("\n***** Decimal degree *****\n");
+          printf("Latitude: %f\n", latitudeDecimalDegree);
+          printf("Longitude: %f\n", longitudeDecimalDegree);
+          printf("\n***** Convert float to MSB and LSB *****\n");
+          printf("Latitude MSB: %u\n", latitudeMSB);
+          printf("Latitude LSB: %u\n", latitudeLSB);
+          printf("Longitude MSB: %u\n", longitudeMSB);
+          printf("Longitude LSB: %u\n", longitudeLSB);
+          printf("\n***** Other data *****\n");
+          printf("Time: %s\n", time);
+          printf("Fix quality: %s\n", fixQuality);
+          printf("Number of statellites: %s\n", numStatellites);
+          printf("GPS precision: %s\n", gpsPrecision);
+          printf("Elevation: %s m\n", elevation);
+        }
+      }
+      else if (strstr(buffer, "$GPVTG") != NULL) {
+        token = strtok(buffer, ",");
+        
+        token = strtok(NULL, ",");
+        if(token != NULL) strcpy(trackMadeGoodTrue, token);
+        
+        token = strtok(NULL, ",");
+        
+        token = strtok(NULL, ",");
+        if(token != NULL) strcpy(trackMadeGoodMagnetic, token);
+        
+        token = strtok(NULL, ",");
+        
+        token = strtok(NULL, ",");
+        if(token != NULL) strcpy(speedInKnot, token);
+        
+        token = strtok(NULL, ",");
+        
+        token = strtok(NULL, ",");
+        if(token != NULL) strcpy(speedInKmHr, token);
+        
+        floatToTwoUInt16(atof(trackMadeGoodTrue), &trackMadeGoodTrueMSB, &trackMadeGoodTrueLSB);
+        floatToTwoUInt16(atof(trackMadeGoodMagnetic), &trackMadeGoodMagneticMSB, &trackMadeGoodMagneticLSB);
+        floatToTwoUInt16(atof(speedInKnot), &speedInKnotMSB, &speedInKnotLSB);
+        floatToTwoUInt16(atof(speedInKmHr), &speedInKmHrMSB, &speedInKmHrLSB);
+        
+        modbusBuffer[12] = trackMadeGoodTrueMSB;
+        modbusBuffer[13] = trackMadeGoodTrueLSB;
+        modbusBuffer[14] = trackMadeGoodMagneticMSB;
+        modbusBuffer[15] = trackMadeGoodMagneticLSB;
+        modbusBuffer[16] = speedInKnotMSB;
+        modbusBuffer[17] = speedInKnotLSB;
+        modbusBuffer[18] = speedInKmHrMSB;
+        modbusBuffer[19] = speedInKmHrLSB;
+        
+        gpvtgDataUpdated = true;
+        
+        if(DEBUG_PRINT) {
+          printf("\n***** Direction and speed *****\n");
+          printf("Track made good true: %s\n", trackMadeGoodTrue);
+          printf("Track made good magnetic: %s\n", trackMadeGoodMagnetic);
+          printf("Speed in knots: %s\n", speedInKnot);
+          printf("Speed in km/h: %s\n", speedInKmHr);
+        }
+      }
+    
+      if (gpggaDataUpdated && gpvtgDataUpdated) {
+        // Break loop if modbus connection is bad
+        if(modbus_connect(mb0) == -1) {
+          printf("\nModbus connection failed: %s", modbus_strerror(errno));
+          modbus_free(mb0);
+          break;
+        }
+        else {
+          // Write modbus buffer to slave device
+          modbus_write_registers(mb0, MODBUS_REGISTER_OFFSET, MODBUS_BUFFER_SIZE, modbusBuffer);
+          modbus_close(mb0);
+        }
+        
+        // Reset data update flags
+        gpggaDataUpdated = false;
+        gpvtgDataUpdated = false;
       }
     }
-    
-    if (modbus_connect(mb0) == -1) {
-      printf("\n100 connection failed: %s", modbus_strerror(errno));
-      modbus_free(mb0);
-    }
-    
-    // Write modbus buffer to slave device
-    modbus_write_registers(mb0, MODBUS_REGISTER_OFFSET, MODBUS_BUFFER_SIZE, modbusBuffer);
-    modbus_close(mb0);
-    sleep(1);
   }
   
   fclose(gpsDevice);
