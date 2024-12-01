@@ -56,7 +56,7 @@ float twoUInt16ToFloat(u_int16_t msb, u_int16_t lsb) {
   return result;
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
   modbus_t *mb0;
   uint16_t modbusBuffer[MODBUS_BUFFER_SIZE] = {0};
   mb0 = modbus_new_tcp("127.0.0.1", MODBUS_TCP_PORT);
@@ -111,7 +111,12 @@ int main(void) {
   u_int16_t speedInKmHrMSB = 0;
   u_int16_t speedInKmHrLSB = 0;
   
-  gpsDevice = fopen("/dev/ttyUSB1", "r");
+  if (argc > 1){
+    printf("Using alternative GPS device: %s\n", argv[1]);
+    gpsDevice = fopen(argv[1], "r");
+  }else{
+    gpsDevice = fopen("/dev/ttyACM1", "r");
+  }
   
   if(gpsDevice == NULL) {
     perror("Error opening gps device");
