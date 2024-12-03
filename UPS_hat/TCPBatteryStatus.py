@@ -1,5 +1,6 @@
 import smbus2
 import time, struct,sys,os,subprocess
+import wdt #sudo pip install SMwdt
 from pyModbusTCP.client import ModbusClient
 from pyModbusTCP.utils import encode_ieee
 # Config Register (R/W)
@@ -212,9 +213,9 @@ class sequent7:
 
 	def readVoltage(self):
 		try:
-			val = (int(subprocess.check_output("wdt -g vbat", shell=True)))/1000.0
-		except Exception as e:
-			val = 0
+			val = wdt.getVbat()
+		except:
+			val = -1
 		return val
 
 	def readCurrent(self):
@@ -222,14 +223,14 @@ class sequent7:
 	
 	def readTemp(self):
 		try:
-			val = int(subprocess.check_output("wdt -g temp ", shell=True))
+			val = wdt.getTemp()
 		except:
 			val = -1
 		return val
 	
 	def readChargeStatus(self):
 		try:
-			val = int(subprocess.check_output("wdt -g charge", shell=True))
+			val = wdt.getChargeStat()
 		except:
 			val = -1
 		return val
@@ -239,23 +240,24 @@ class sequent7:
 	
 	def checkShutdown(self):
 		try:
-			voltage = int(subprocess.check_output("wdt -g vbat", shell=True))
+			voltage = wdt.getVbat()
 			if voltage > 0:
-				if voltage < 3600:
-					os.system("wdt -rob 0")
-					os.system("wdt -p 30")
+				if voltage < 3.6:
+					wdt.setRepowerOnBattery(0)
+					wdt.setPeriod(30)
+					wdt.setOffInterval(3600)
 					os.system("sudo shutdown now")
 					return 1
 				else:
-					os.system("wdt -rob 1")
-					os.system("wdt -r")
+					wdt.setRepowerOnBattery(1)
+					wdt.reload()
 		except:
 			return -1
 
 	
 	def readPercentage(self):
 		try:
-			val = (int(subprocess.check_output("wdt -g vbat", shell=True)))/1000.0
+			val = wdt.getVbat()
 			p = 123 - (123/pow((1+ pow((val/3.7),80)),0.165))
 			if(p > 100):p = 100
 			if(p < 0):p = 0
@@ -323,7 +325,7 @@ if __name__=='__main__':
 			# print("temp:          {:6.3f}C".format(temp))
 			# print("")
 
-			time.sleep(5)
+			time.sleep(35)
 			
 	except Exception as e:
 		print(e)
